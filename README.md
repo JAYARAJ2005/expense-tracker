@@ -48,4 +48,4 @@ A colorful, animated web application to record income and daily expenses, track 
 - Mobile app version
 
 ## 👤 Author
-Jayaraj – BCA Project
+Jayaraj – MCA
