@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Expense Tracker</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{--ink:#2b1f4a;--muted:#7a6f95;--line:#eadff7;--in:#12b886;--out:#f0506e;
 --grad-in:linear-gradient(135deg,#12b886,#38d9a9);--grad-out:linear-gradient(135deg,#f0506e,#ff8a5c);
@@ -76,21 +77,57 @@ td.in,td.out{font-weight:600}
 .toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,30px);background:linear-gradient(90deg,#6c5ce7,#e056c1);color:#fff;padding:11px 22px;border-radius:999px;opacity:0;transition:opacity .3s,transform .3s;pointer-events:none;box-shadow:0 8px 22px #6c5ce766}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+[hidden]{display:none!important}
+.userbox{display:flex;align-items:center;gap:8px;font-size:13px}
+.userbox span{background:#ffffff2e;padding:5px 12px;border-radius:999px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout{background:#fff;color:#c2379f;border:0;padding:7px 14px;border-radius:999px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:transform .2s}
+.logout:hover{transform:translateY(-2px) scale(1.05)}
+.authwrap{display:grid;place-items:center;min-height:calc(100vh - 70px);padding:20px 16px}
+.authcard{width:100%;max-width:410px;animation:pageIn .6s cubic-bezier(.2,.8,.2,1)}
+.authcard h2{font-size:24px;text-align:center;margin:0 0 4px}
+.authcard p.sub{text-align:center;color:var(--muted);margin:0 0 16px;font-size:14px}
+.authcard form{max-width:none}
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#efe6ff;padding:5px;border-radius:999px;margin-bottom:16px}
+.tabs button{border:0;background:transparent;padding:9px;border-radius:999px;font:inherit;font-weight:600;color:var(--muted);cursor:pointer;transition:all .25s}
+.tabs button.active{background:linear-gradient(90deg,#6c5ce7,#e056c1);color:#fff;box-shadow:0 4px 12px #6c5ce755}
+.msg{min-height:20px;font-size:13px;text-align:center;color:var(--muted)}
+.msg.err{color:var(--out)}.msg.ok{color:var(--in)}
+.bigico{font-size:46px;text-align:center;animation:bob 3s ease-in-out infinite}
+.btn:disabled{opacity:.6;cursor:wait}
 </style>
 </head>
 <body>
 <div class="blobs"><i></i><i></i><i></i></div>
 <header>
   <h1><span class="logo">💰</span> Expense Tracker</h1>
-  <nav id="nav">
+  <nav id="nav" hidden>
     <button data-page="dashboard" class="active">Dashboard</button>
     <button data-page="add">Add transaction</button>
     <button data-page="list">Transactions</button>
     <button data-page="reports">Reports</button>
   </nav>
+  <div class="userbox" id="userbox" hidden><span id="userEmail"></span><button class="logout" id="logoutBtn" type="button">Logout</button></div>
 </header>
 
-<main>
+<section id="authScreen" class="authwrap">
+  <div class="card authcard">
+    <div class="bigico">💰</div>
+    <h2>Welcome</h2>
+    <p class="sub">Log in to see your expenses on any device</p>
+    <div class="tabs">
+      <button type="button" id="tabLogin" class="active">Login</button>
+      <button type="button" id="tabSignup">Sign up</button>
+    </div>
+    <form id="authForm">
+      <label>Email<input type="email" id="authEmail" required autocomplete="email" placeholder="you@example.com"></label>
+      <label>Password<input type="password" id="authPass" required minlength="6" autocomplete="current-password" placeholder="At least 6 characters"></label>
+      <button class="btn" type="submit" id="authBtn">Login</button>
+      <div class="msg" id="authMsg" role="status"></div>
+    </form>
+  </div>
+</section>
+
+<main id="app" hidden>
   <!-- DASHBOARD -->
   <section id="dashboard" class="page active">
     <div class="cards">
@@ -154,15 +191,20 @@ const INCOME_CATS = ["Salary", "Business", "Gift", "Other income"];
 const EXPENSE_CATS = ["🍔 Food", "🚗 Travel", "🛍️ Shopping", "🏠 Rent", "💡 Bills", "🎓 Education", "🏥 Medical", "📦 Others"];
 const COLORS = ["#ff6b6b","#feca57","#48dbfb","#1dd1a1","#a55eea","#ff9f43","#5f27cd","#ff6fb5"];
 
-let transactions = load();
+let transactions = [];
 let charts = {};
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(KEY)) || []; }
-  catch (e) { return []; }
-}
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(transactions)); } catch (e) {}
+// ---------- Supabase ----------
+const SUPABASE_URL = "https://giqgmewkfmcwamtxlshe.supabase.co";
+const SUPABASE_KEY = "sb_publishable_YUn379od6Z-hySHyxXEubA_2ZHo64MV";   // public key, safe in browser code
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let currentUser = null;
+
+async function loadTransactions() {
+  const { data, error } = await sb.from("transactions").select("*")
+    .order("date", { ascending: false }).order("id", { ascending: false });
+  if (error) { toast("Could not load data: " + error.message); return; }
+  transactions = data.map(t => ({ ...t, amount: Number(t.amount) }));
 }
 
 // ---------- Helpers ----------
@@ -209,15 +251,18 @@ function fillCategories() {
   $("category").innerHTML = cats.map(c => `<option>${c}</option>`).join("");
 }
 $("type").addEventListener("change", fillCategories);
-$("form").addEventListener("submit", e => {
+$("form").addEventListener("submit", async e => {
   e.preventDefault();
   const amount = parseFloat($("amount").value);
   if (!(amount > 0)) return toast("Enter an amount greater than 0");
-  transactions.push({
-    id: Date.now(), type: $("type").value, amount,
-    category: $("category").value, description: $("desc").value.trim(), date: $("date").value
-  });
-  save();
+  const btn = e.submitter; btn.disabled = true;
+  const { data, error } = await sb.from("transactions").insert({
+    type: $("type").value, amount, category: $("category").value,
+    description: $("desc").value.trim(), date: $("date").value
+  }).select().single();
+  btn.disabled = false;
+  if (error) return toast("Could not save: " + error.message);
+  transactions.unshift({ ...data, amount: Number(data.amount) });
   $("form").reset(); $("date").value = today(); fillCategories();
   toast("Transaction added");
   render();
@@ -225,9 +270,11 @@ $("form").addEventListener("submit", e => {
 function today() { return new Date().toISOString().slice(0, 10); }
 
 // ---------- Delete ----------
-function del(id) {
+async function del(id) {
+  const { error } = await sb.from("transactions").delete().eq("id", id);
+  if (error) return toast("Could not delete: " + error.message);
   transactions = transactions.filter(t => t.id !== id);
-  save(); toast("Transaction deleted"); render();
+  toast("Transaction deleted"); render();
 }
 
 // ---------- Filters ----------
@@ -308,10 +355,64 @@ function makeChart(id, config) {
 
 function render() { renderDashboard(); renderList(); renderReports(); }
 
+// ---------- Login / Signup ----------
+let authMode = "login";
+function setMode(mode) {
+  authMode = mode;
+  $("tabLogin").classList.toggle("active", mode === "login");
+  $("tabSignup").classList.toggle("active", mode === "signup");
+  $("authBtn").textContent = mode === "login" ? "Login" : "Create account";
+  $("authPass").autocomplete = mode === "login" ? "current-password" : "new-password";
+  setMsg("");
+}
+function setMsg(text, cls = "") { $("authMsg").textContent = text; $("authMsg").className = "msg " + cls; }
+$("tabLogin").addEventListener("click", () => setMode("login"));
+$("tabSignup").addEventListener("click", () => setMode("signup"));
+
+$("authForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const email = $("authEmail").value.trim(), password = $("authPass").value;
+  $("authBtn").disabled = true; setMsg("Please wait...");
+  const result = authMode === "login"
+    ? await sb.auth.signInWithPassword({ email, password })
+    : await sb.auth.signUp({ email, password });
+  $("authBtn").disabled = false;
+  if (result.error) return setMsg(result.error.message, "err");
+  if (authMode === "signup" && !result.data.session) {
+    setMsg("Account created! Check your email to confirm it, then log in.", "ok");
+    setMode("login");
+    setMsg("Account created! Check your email to confirm it, then log in.", "ok");
+  }
+});
+
+$("logoutBtn").addEventListener("click", () => sb.auth.signOut());
+
+async function showApp(user) {
+  currentUser = user.id;
+  $("authScreen").hidden = true;
+  $("app").hidden = false; $("nav").hidden = false; $("userbox").hidden = false;
+  $("userEmail").textContent = user.email;
+  await loadTransactions();
+  render();
+}
+function showAuth() {
+  currentUser = null; transactions = [];
+  $("app").hidden = true; $("nav").hidden = true; $("userbox").hidden = true;
+  $("authScreen").hidden = false;
+  $("authForm").reset(); setMsg("");
+}
+// fires on page load (existing session), login and logout
+sb.auth.onAuthStateChange((event, session) => {
+  setTimeout(() => {
+    if (!session) return showAuth();
+    if (currentUser === session.user.id) return;   // token refresh, nothing to reload
+    showApp(session.user);
+  }, 0);
+});
+
 // ---------- Start ----------
 $("date").value = today();
 fillCategories();
-render();
 </script>
 </body>
 </html>
